@@ -33,13 +33,18 @@ def redundancy(
     """Max cosine similarity against a reference window of newer shards.
 
     The reference set is the pruner's moving window of recent L1 embeddings,
-    so the penalty fires on duplicates of *current* thought rather than on any
-    pair of similar shards anywhere in the store.
+    which commonly *includes the shard itself*. We detect a self-match by
+    the top cosine being numerically ≥ 0.9999 and fall back to the second
+    best, so a shard does not penalise itself for existing.
     """
     if reference_embeddings.size == 0:
         return 0.0
     sims = cosine(shard_embedding, reference_embeddings)[0]
-    return float(sims.max())
+    top = float(sims.max())
+    if top >= 0.9999 and sims.size > 1:
+        # Partition is O(n) and avoids fully sorting just to grab second-best.
+        return float(np.partition(sims, -2)[-2])
+    return top
 
 
 def compute_utility(
