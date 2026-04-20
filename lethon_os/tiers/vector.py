@@ -71,16 +71,16 @@ class VectorTier:
         top_k: int = 8,
         score_threshold: float | None = None,
     ) -> list[MemoryShard]:
-        hits = await self._q.search(
+        response = await self._q.query_points(
             collection_name=self._collection,
-            query_vector=query_vector,
+            query=query_vector,
             limit=top_k,
             score_threshold=score_threshold,
             with_payload=True,
             with_vectors=True,
         )
         out: list[MemoryShard] = []
-        for h in hits:
+        for h in response.points:
             payload = dict(h.payload or {})
             payload["embedding"] = list(h.vector) if h.vector else []
             out.append(MemoryShard.model_validate(payload))
