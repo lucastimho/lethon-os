@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Environments / secrets — never commit
+.env
+.env.*
+*.pem
+*.key
+credentials*
+.secret*
+
+# Local databases produced at runtime
+*.db
+*.sqlite
+*.sqlite3
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Claude Code local settings
+.claude/settings.local.json
