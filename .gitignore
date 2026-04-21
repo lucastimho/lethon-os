@@ -27,3 +27,12 @@ credentials*
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Frontend (Next.js) — build artifacts, deps, env
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/next-env.d.ts
+frontend/.env.local
+frontend/.env.*.local
