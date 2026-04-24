@@ -7,6 +7,13 @@ from lethon_os.security.schemas import (
     SignedAuditReceipt,
     VerifiedMemoryShard,
 )
+from lethon_os.security.scrubber import (
+    MemoryScrubber,
+    ScrubDecision,
+    ScrubberAlert,
+    SemanticScorer,
+    Severity,
+)
 from lethon_os.security.signing import (
     Ed25519Signer,
     Ed25519Verifier,
@@ -24,6 +31,11 @@ __all__ = [
     "Ed25519Verifier",
     "IntegrityError",
     "KeyRegistry",
+    "MemoryScrubber",
+    "ScrubDecision",
+    "ScrubberAlert",
+    "SemanticScorer",
+    "Severity",
     "SignedAuditLog",
     "SignedAuditReceipt",
     "VerifiedMemoryShard",
