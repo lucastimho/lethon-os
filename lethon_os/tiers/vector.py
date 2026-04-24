@@ -3,6 +3,7 @@ from __future__ import annotations
 from qdrant_client import AsyncQdrantClient, models
 
 from lethon_os.schemas import MemoryShard, Tier
+from lethon_os.tiers.archive import L0ProtectionError
 
 
 class VectorTier:
@@ -31,6 +32,11 @@ class VectorTier:
         )
 
     async def put(self, shard: MemoryShard) -> None:
+        # L0_CORE never lives in Qdrant — it has a dedicated L1-only path.
+        if shard.tier is Tier.L0_CORE:
+            raise L0ProtectionError(
+                f"cannot write L0_CORE shard {shard.id} to vector tier",
+            )
         shard.tier = Tier.L2
         payload = shard.model_dump(mode="json")
         payload.pop("embedding", None)  # vector travels separately

@@ -17,7 +17,11 @@ class CacheTier:
         self._ttl = ttl_seconds
 
     async def put(self, shard: MemoryShard) -> None:
-        shard.tier = Tier.L1
+        # Preserve L0_CORE: the constitution lives in Redis for fast access
+        # but must retain its tier tag so the pruner's is_prunable filter
+        # continues to exclude it. Any non-L0 shard is (re-)tagged as L1.
+        if shard.tier is not Tier.L0_CORE:
+            shard.tier = Tier.L1
         key = SHARD_KEY.format(id=shard.id)
         blob = shard.model_dump_json()
         score = shard.last_accessed_at.timestamp()

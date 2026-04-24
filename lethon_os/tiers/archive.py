@@ -8,6 +8,11 @@ import aiosqlite
 
 from lethon_os.schemas import MemoryShard, Tier
 
+
+class L0ProtectionError(Exception):
+    """Raised when any operation tries to demote, delete, or archive a
+    shard living in ``Tier.L0_CORE`` — the agent's safety constitution."""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS shards (
     id              TEXT PRIMARY KEY,
@@ -42,6 +47,14 @@ class ArchiveTier:
         return self._db
 
     async def put(self, shard: MemoryShard) -> None:
+        # Defense-in-depth: refuse to archive anything that originated in
+        # L0_CORE. The pruner's tier filter should never let an L0 shard
+        # reach this point, but this guard catches direct-call bugs and
+        # compromised code paths without an I/O round-trip.
+        if shard.tier is Tier.L0_CORE:
+            raise L0ProtectionError(
+                f"cannot archive L0_CORE shard {shard.id} — constitution is immutable",
+            )
         shard.tier = Tier.L3
         blob = gzip.compress(shard.model_dump_json().encode("utf-8"))
         await self._conn().execute(
