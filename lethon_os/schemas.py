@@ -9,9 +9,21 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class Tier(str, Enum):
-    L1 = "L1"  # Redis — hot
-    L2 = "L2"  # Qdrant — warm
-    L3 = "L3"  # SQLite — cold archive
+    L0_CORE = "L0_CORE"  # Immutable system constitution — pruner has NO access.
+    L1 = "L1"            # Redis — hot
+    L2 = "L2"            # Qdrant — warm
+    L3 = "L3"            # SQLite — cold archive
+
+    @property
+    def is_prunable(self) -> bool:
+        """``L0_CORE`` holds safety guardrails the pruner must never touch.
+
+        Every code path that demotes, archives, or deletes a shard is
+        expected to check this before mutating state. Honor-system at the
+        type level; the pruner's runtime guard lands alongside the
+        audit-receipt writer in a follow-up change.
+        """
+        return self is not Tier.L0_CORE
 
 
 def _utcnow() -> datetime:
@@ -33,8 +45,12 @@ class MemoryShard(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=False)
 
     id: str = Field(default_factory=_new_id)
-    content: str
-    embedding: list[float]
+    # Hard caps on user-controlled fields: a malicious payload of unbounded
+    # size could OOM the server before it ever reaches the utility loop.
+    # 64 KB content and 4096-D embedding cover every real LLM use case
+    # (current SOTA is 3072-D); anything past that is suspicious.
+    content: str = Field(..., min_length=1, max_length=65_536)
+    embedding: list[float] = Field(..., min_length=1, max_length=4096)
 
     created_at: datetime = Field(default_factory=_utcnow)
     last_accessed_at: datetime = Field(default_factory=_utcnow)
