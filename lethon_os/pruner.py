@@ -4,14 +4,24 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
+from typing import Awaitable, Callable
 
 import numpy as np
 
 from lethon_os.controller import MemoryController
-from lethon_os.schemas import MemoryShard, PruneStats, UtilityWeights
+from lethon_os.schemas import MemoryShard, PruneStats, Tier, UtilityWeights
 from lethon_os.utility import score_batch
 
 log = logging.getLogger("lethon_os.pruner")
+
+# Optional audit hook. Signature mirrors the state transition:
+#   (shard, action_name, from_tier, to_tier) -> None
+# `action_name` is a plain string to keep this module free of any
+# dependency on `lethon_os.security`.
+PrunerHook = Callable[
+    [MemoryShard, str, Tier, Tier],
+    Awaitable[None],
+]
 
 
 class UtilityPruner:
@@ -30,11 +40,13 @@ class UtilityPruner:
         weights: UtilityWeights | None = None,
         interval_seconds: float = 30.0,
         reference_window: int = 64,
+        on_action: PrunerHook | None = None,
     ):
         self.controller = controller
         self.weights = weights or UtilityWeights()
         self.interval = interval_seconds
         self.reference_window = reference_window
+        self._on_action = on_action
 
         self._goal_embedding: np.ndarray = np.zeros(0, dtype=np.float32)
         self._task: asyncio.Task[None] | None = None
@@ -96,8 +108,18 @@ class UtilityPruner:
         ref_array = np.asarray(ref_embs, dtype=np.float32) if ref_embs else np.empty((0, 0), dtype=np.float32)
         now = datetime.now(timezone.utc)
 
+        # Security boundary: filter non-prunable tiers (L0_CORE) out of the
+        # demote loop. The agent's safety constitution lives in L0 and must
+        # never be touched by utility decay.
+        l1_shards = [
+            s for s in await self.controller.cache.scan() if s.tier.is_prunable
+        ]
+        l2_shards = [
+            s for s in await self.controller.vector.scan() if s.tier.is_prunable
+        ]
+
         stats.demoted_l1_l2 = await self._demote_tier(
-            shards=list(await self.controller.cache.scan()),
+            shards=l1_shards,
             ref_array=ref_array,
             now=now,
             threshold=self.weights.l1_threshold,
@@ -105,7 +127,7 @@ class UtilityPruner:
         )
 
         stats.demoted_l2_l3 = await self._demote_tier(
-            shards=await self.controller.vector.scan(),
+            shards=l2_shards,
             ref_array=ref_array,
             now=now,
             threshold=self.weights.l2_threshold,
@@ -153,6 +175,7 @@ class UtilityPruner:
         # L2 already has this shard (write-through on put), so we just drop
         # it from the cache. Score is persisted on next L2 touch.
         await self.controller.cache.delete(shard.id)
+        await self._emit("demote", shard, Tier.L1, Tier.L2)
 
     async def _demote_l2_to_l3(self, shard: MemoryShard) -> None:
         # Ordered to avoid a window where the shard exists nowhere:
@@ -161,3 +184,20 @@ class UtilityPruner:
         await self.controller.vector.delete(shard.id)
         # Defensive: if it lingered in L1, remove it.
         await self.controller.cache.delete(shard.id)
+        await self._emit("archive", shard, Tier.L2, Tier.L3)
+
+    async def _emit(
+        self, action: str, shard: MemoryShard, from_tier: Tier, to_tier: Tier,
+    ) -> None:
+        """Invoke the optional audit hook. Failures are logged, never swallowed
+        into the demote loop — a broken audit sink should not poison the
+        pruner, but it must be visible in the logs."""
+        if self._on_action is None:
+            return
+        try:
+            await self._on_action(shard, action, from_tier, to_tier)
+        except Exception:
+            log.exception(
+                "audit hook failed for %s: %s %s→%s",
+                shard.id, action, from_tier.value, to_tier.value,
+            )
