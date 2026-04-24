@@ -1,5 +1,6 @@
 """Cryptographic attestation layer — non-repudiable memory governance."""
 
+from lethon_os.security.keys import KeyRegistry
 from lethon_os.security.schemas import (
     AuditAction,
     SignedAuditReceipt,
@@ -20,6 +21,7 @@ __all__ = [
     "Ed25519Signer",
     "Ed25519Verifier",
     "IntegrityError",
+    "KeyRegistry",
     "SignedAuditReceipt",
     "VerifiedMemoryShard",
     "sign_receipt",
