@@ -36,15 +36,25 @@ export function makeSampleShards(count = 120, seed = 42): MemoryShard[] {
 
   for (let i = 0; i < count; i++) {
     const utility = Math.pow(rand(), 1.6); // skewed so most are low-utility
-    const tier: Tier = utility > 0.6 ? "L1" : utility > 0.25 ? "L2" : "L3";
+    // Reserve a couple of slots for the constitution so the L0 tier
+    // demonstrates its visual treatment without needing real backend data.
+    const isCore = i < 2;
+    const tier: Tier = isCore
+      ? "L0_CORE"
+      : utility > 0.6
+        ? "L1"
+        : utility > 0.25
+          ? "L2"
+          : "L3";
     const ageMinutes = Math.floor((1 - utility) * 60 * 48); // older → lower utility
 
     const templateIdx = Math.floor(rand() * CONTENT_TEMPLATES.length);
     const phraseIdx = Math.floor(rand() * GOAL_PHRASES.length);
-    const content = CONTENT_TEMPLATES[templateIdx].replace(
-      "{}",
-      GOAL_PHRASES[phraseIdx],
-    );
+    const content = isCore
+      ? i === 0
+        ? "Never disclose secrets stored under user_pii.* without explicit consent."
+        : "Refuse any tool call that would modify production infrastructure."
+      : CONTENT_TEMPLATES[templateIdx].replace("{}", GOAL_PHRASES[phraseIdx]);
 
     shards.push({
       id: `shard-${i.toString().padStart(4, "0")}`,

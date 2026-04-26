@@ -2,7 +2,31 @@
  * Wire-format mirror of the Python `MemoryShard`. Keep in sync with
  * `lethon_os/schemas.py` — if you add a field there, add it here too.
  */
-export type Tier = "L1" | "L2" | "L3";
+export type Tier = "L0_CORE" | "L1" | "L2" | "L3";
+
+/** UI-friendly tier names + descriptions. Single source of truth for vocab. */
+export const TIER_LABEL: Record<Tier, { name: string; abbrev: string; description: string }> = {
+  L0_CORE: {
+    name: "Constitution",
+    abbrev: "L0",
+    description: "Immutable safety rules. Never pruned, never demoted.",
+  },
+  L1: {
+    name: "Working",
+    abbrev: "L1",
+    description: "Hot context. Sub-10ms reads. Decays over time.",
+  },
+  L2: {
+    name: "Episodic",
+    abbrev: "L2",
+    description: "Vector-searchable warm memory. Promoted on access.",
+  },
+  L3: {
+    name: "Archive",
+    abbrev: "L3",
+    description: "Compressed cold storage. Auditable, restorable on lookup.",
+  },
+};
 
 export interface MemoryShard {
   id: string;
