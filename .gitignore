@@ -34,5 +34,6 @@ frontend/.next/
 frontend/out/
 frontend/.turbo/
 frontend/next-env.d.ts
+frontend/tsconfig.tsbuildinfo
 frontend/.env.local
 frontend/.env.*.local
