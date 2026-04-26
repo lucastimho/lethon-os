@@ -7,24 +7,19 @@ import { clamp } from "@/lib/utils";
 import type { MemoryShard, Tier } from "@/lib/types";
 
 /* -----------------------------------------------------------------------------
- * Live Memory Graph
+ * Live Memory Graph — the page's hero.
  *
- * A force-directed graph where every node = one MemoryShard.
+ * Visual grammar (no glow, no chrome):
+ *   • Radius      — utility_score, range 3–11px
+ *   • Fill alpha  — utility_score, range 0.18–1.0
+ *   • Stroke      — high-utility nodes get a 1px ring of the tier hue;
+ *                   low-utility nodes have none. Replaces the ex-glow.
+ *   • Position    — radial pull: high-utility orbits the center,
+ *                   low-utility drifts toward the rim.
+ *   • Hue         — tier (L0 amber, L1 cyan, L2 teal, L3 grey)
  *
- * Visual grammar:
- *   • Node radius      — scales with utility_score (0.3 → 0.9 times base)
- *   • Node opacity     — scales with utility_score (0.25 → 1.0)
- *   • Radial distance  — (1 − utility) × maxRadius. High-utility shards
- *                        sit near the center; low-utility drift to the rim.
- *   • Hue              — tier (L1 sky, L2 violet, L3 cold grey)
- *
- * Design notes:
- *   – SVG renderer chosen for the scaffold. Fine up to ~2k nodes. Past
- *     that, switch to a Canvas 2D renderer (d3 exposes the same sim).
- *   – The simulation runs while the component is mounted; we cool alpha
- *     gently on every data update so node motion is smooth instead of
- *     snapping.
- *   – Zoom/pan is on the <svg> root via d3-zoom so shards stay clickable.
+ * No drop-shadow filters anywhere. The glow has been removed — utility
+ * is encoded via brightness and stroke instead.
  * ---------------------------------------------------------------------------*/
 
 type SimNode = d3.SimulationNodeDatum & {
@@ -32,35 +27,40 @@ type SimNode = d3.SimulationNodeDatum & {
   utility: number;
   tier: Tier;
   label: string;
+  selected: boolean;
 };
 
 interface MemoryGraphProps {
   shards: MemoryShard[];
-  /** Optional click-through for the manual Pin / Prune controls upstream. */
+  selectedId?: string | null;
   onSelect?: (shard: MemoryShard) => void;
   className?: string;
 }
 
 const TIER_COLOR: Record<Tier, string> = {
+  L0_CORE: "var(--color-l0)",
   L1: "var(--color-l1)",
   L2: "var(--color-l2)",
   L3: "var(--color-l3)",
 };
 
-export function MemoryGraph({ shards, onSelect, className }: MemoryGraphProps) {
+export function MemoryGraph({
+  shards,
+  selectedId,
+  onSelect,
+  className,
+}: MemoryGraphProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const svgRef = React.useRef<SVGSVGElement>(null);
   const simRef = React.useRef<d3.Simulation<SimNode, undefined> | null>(null);
   const [size, setSize] = React.useState({ w: 800, h: 600 });
 
-  // Index the source shards by id so we can hand real objects to callbacks
-  // without round-tripping through simulation state.
   const shardIndex = React.useMemo(
     () => new Map(shards.map((s) => [s.id, s])),
     [shards],
   );
 
-  /* ------------------------------------------------- Resize observation */
+  /* ------------------------------------------------- Resize observer  */
   React.useEffect(() => {
     if (!containerRef.current) return;
     const ro = new ResizeObserver((entries) => {
@@ -71,7 +71,7 @@ export function MemoryGraph({ shards, onSelect, className }: MemoryGraphProps) {
     return () => ro.disconnect();
   }, []);
 
-  /* ------------------------------------------------- Simulation setup   */
+  /* ------------------------------------------------- Simulation setup */
   React.useEffect(() => {
     if (!svgRef.current) return;
     const svg = d3.select(svgRef.current);
@@ -79,28 +79,26 @@ export function MemoryGraph({ shards, onSelect, className }: MemoryGraphProps) {
 
     const root = svg.append("g").attr("class", "viewport");
 
-    // Zoom & pan — keep nodes clickable by applying transform to the group.
     const zoom = d3
       .zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.3, 4])
       .on("zoom", (e) => root.attr("transform", e.transform.toString()));
     svg.call(zoom);
 
-    const nodeG = root.append("g").attr("class", "nodes");
+    root.append("g").attr("class", "nodes");
 
-    // Hot-swappable simulation — we rebuild nodes on data updates but keep
-    // the sim reference alive across renders so positions persist.
     const sim = d3
       .forceSimulation<SimNode>()
-      .force("charge", d3.forceManyBody<SimNode>().strength(-28))
-      .force("collide", d3.forceCollide<SimNode>((d) => nodeRadius(d.utility) + 2))
+      .force("charge", d3.forceManyBody<SimNode>().strength(-22))
+      .force("collide", d3.forceCollide<SimNode>((d) => nodeRadius(d.utility) + 1.5))
       .force("center", d3.forceCenter(size.w / 2, size.h / 2))
       .alphaDecay(0.035);
 
     simRef.current = sim;
 
     sim.on("tick", () => {
-      nodeG
+      root
+        .select<SVGGElement>("g.nodes")
         .selectAll<SVGGElement, SimNode>("g.node")
         .attr("transform", (d) => `translate(${d.x ?? 0}, ${d.y ?? 0})`);
     });
@@ -109,10 +107,9 @@ export function MemoryGraph({ shards, onSelect, className }: MemoryGraphProps) {
       sim.stop();
       simRef.current = null;
     };
-    // Only rebuild the simulation when the viewport changes size.
   }, [size.w, size.h]);
 
-  /* ------------------------------------------------- Data binding      */
+  /* ------------------------------------------------- Data binding    */
   React.useEffect(() => {
     const sim = simRef.current;
     if (!sim || !svgRef.current) return;
@@ -122,13 +119,11 @@ export function MemoryGraph({ shards, onSelect, className }: MemoryGraphProps) {
       utility: clamp(s.utility_score, 0, 1),
       tier: s.tier,
       label: s.content,
+      selected: s.id === selectedId,
     }));
 
-    // Preserve positions across updates: copy over x/y from current nodes
-    // when the id matches so the graph doesn't snap on every SSE frame.
-    const prev = new Map(
-      (sim.nodes() as SimNode[]).map((n) => [n.id, n]),
-    );
+    // Preserve positions across data updates so the graph breathes.
+    const prev = new Map((sim.nodes() as SimNode[]).map((n) => [n.id, n]));
     for (const n of nodes) {
       const prior = prev.get(n.id);
       if (prior) {
@@ -141,16 +136,20 @@ export function MemoryGraph({ shards, onSelect, className }: MemoryGraphProps) {
 
     sim.nodes(nodes);
 
-    // Radial force: utility → centripetal pull. High utility → near center.
-    const radius = Math.min(size.w, size.h) / 2 - 40;
+    // Radial pull: utility maps to centripetal distance.
+    const radius = Math.min(size.w, size.h) / 2 - 60;
     sim.force(
       "radial",
       d3
-        .forceRadial<SimNode>((d) => (1 - d.utility) * radius, size.w / 2, size.h / 2)
-        .strength(0.25),
+        .forceRadial<SimNode>(
+          (d) => (1 - d.utility) * radius,
+          size.w / 2,
+          size.h / 2,
+        )
+        .strength(0.22),
     );
 
-    /* ------ Node render ------ */
+    /* ------ Render ------ */
     const svg = d3.select(svgRef.current);
     const nodeG = svg.select<SVGGElement>("g.viewport g.nodes");
 
@@ -172,78 +171,60 @@ export function MemoryGraph({ shards, onSelect, className }: MemoryGraphProps) {
       .append("circle")
       .attr("r", (d) => nodeRadius(d.utility))
       .attr("fill", (d) => TIER_COLOR[d.tier])
-      .attr("fill-opacity", (d) => 0.25 + d.utility * 0.75)
+      .attr("fill-opacity", (d) => 0.18 + d.utility * 0.82)
       .attr("stroke", (d) => TIER_COLOR[d.tier])
-      .attr("stroke-opacity", 0.9)
-      .attr("stroke-width", 1)
-      .style("filter", (d) =>
-        d.utility > 0.6
-          ? `drop-shadow(0 0 ${4 + d.utility * 10}px ${TIER_COLOR[d.tier]})`
-          : "none",
-      );
+      .attr("stroke-opacity", (d) => (d.utility > 0.55 ? 0.9 : 0))
+      .attr("stroke-width", (d) => (d.selected ? 2 : 1));
 
-    enter.append("title").text((d) => `${d.label}\nutility: ${d.utility.toFixed(2)}`);
+    enter.append("title").text((d) =>
+      `${d.label}\nutility ${d.utility.toFixed(2)} · tier ${d.tier}`,
+    );
 
-    // Update existing nodes in place — this is what makes decay feel alive.
     join
       .select("circle")
       .transition()
-      .duration(600)
-      .attr("r", (d) => nodeRadius(d.utility))
+      .duration(550)
+      .ease(d3.easeCubicOut)
+      .attr("r", (d) => nodeRadius(d.utility) * (d.selected ? 1.4 : 1))
       .attr("fill", (d) => TIER_COLOR[d.tier])
-      .attr("fill-opacity", (d) => 0.25 + d.utility * 0.75)
-      .attr("stroke", (d) => TIER_COLOR[d.tier]);
+      .attr("fill-opacity", (d) => 0.18 + d.utility * 0.82)
+      .attr("stroke", (d) =>
+        d.selected ? "var(--color-foreground)" : TIER_COLOR[d.tier],
+      )
+      .attr("stroke-opacity", (d) =>
+        d.selected ? 1 : d.utility > 0.55 ? 0.9 : 0,
+      )
+      .attr("stroke-width", (d) => (d.selected ? 2 : 1));
 
     join
       .select("title")
-      .text((d) => `${d.label}\nutility: ${d.utility.toFixed(2)}`);
+      .text((d) =>
+        `${d.label}\nutility ${d.utility.toFixed(2)} · tier ${d.tier}`,
+      );
 
     join.exit().transition().duration(400).style("opacity", 0).remove();
 
-    // Gentle reheat so new/changed nodes settle without jarring the rest.
-    sim.alpha(0.35).restart();
-  }, [shards, shardIndex, size.w, size.h, onSelect]);
+    sim.alpha(0.32).restart();
+  }, [shards, shardIndex, size.w, size.h, onSelect, selectedId]);
 
   return (
     <div
       ref={containerRef}
-      className={`relative h-full w-full overflow-hidden rounded-[var(--radius)] ${className ?? ""}`}
+      className={`relative h-full w-full ${className ?? ""}`}
     >
-      {/* Decorative starfield behind the graph — fits the cyber-glass theme. */}
-      <div className="absolute inset-0 stardust opacity-60 pointer-events-none" />
       <svg
         ref={svgRef}
         width={size.w}
         height={size.h}
-        className="relative block"
+        className="block"
         role="img"
-        aria-label="Semantic memory graph"
+        aria-label="Semantic memory graph — node position and brightness encode utility score"
       />
-      <GraphLegend />
     </div>
   );
 }
-
-/* -------------------------------------------------------------------------- */
 
 function nodeRadius(utility: number): number {
-  // Base radius scaled by utility. Floor at 3px so low-utility nodes stay
-  // visible (and clickable) as they drift to the periphery.
-  return 3 + utility * 9;
-}
-
-function GraphLegend() {
-  return (
-    <div className="pointer-events-none absolute bottom-3 left-3 flex gap-3 text-[11px] font-mono text-muted-foreground/80">
-      {(["L1", "L2", "L3"] as const).map((tier) => (
-        <div key={tier} className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-2 w-2 rounded-full"
-            style={{ background: TIER_COLOR[tier] }}
-          />
-          <span>{tier}</span>
-        </div>
-      ))}
-    </div>
-  );
+  // Floor at 3px so low-utility nodes stay clickable.
+  return 3 + utility * 8;
 }
